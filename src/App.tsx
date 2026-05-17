@@ -1502,6 +1502,11 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
           )}
         </div>
         <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
+          {!isEditMode && (
+            <h2 className="text-base sm:text-lg md:text-xl font-bold text-amber-900 whitespace-nowrap">
+              {currentProblem.title}
+            </h2>
+          )}
           <div className="flex items-center gap-2">
             <button
               onClick={() => setCurrentProblemIndex(prev => Math.max(0, prev - 1))}
@@ -1527,50 +1532,38 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
       <main className="w-full max-w-5xl flex flex-col lg:flex-row gap-8 items-start justify-center">
         {/* Info Column */}
         <div className="w-full lg:w-1/3 px-2 sm:px-0 space-y-4 sm:space-y-6 order-2 lg:order-1">
-          <section className="bg-white/60 p-4 sm:p-6 rounded-xl border border-amber-200 shadow-sm">
-            <div className="mb-4">
-              {isEditMode ? (
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-amber-700 block uppercase tracking-wider">問題タイトル</label>
-                  <input
-                    type="text"
-                    value={currentProblem.title}
-                    onChange={(e) => {
-                      const updatedProblems = [...problems];
-                      updatedProblems[currentProblemIndex] = {
-                        ...currentProblem,
-                        title: e.target.value,
-                      };
-                      setProblems(updatedProblems);
-                    }}
-                    className="w-full text-xl font-bold p-2 border border-amber-300 rounded-lg bg-white text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    placeholder="問題のタイトルを入力"
-                  />
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-base sm:text-xl font-bold text-amber-900 mr-2 whitespace-nowrap">
-                    {currentProblem.title}
-                  </h2>
-                  <button onClick={() => setShowInfo(!showInfo)} className="text-amber-600 hover:text-amber-800 flex items-center gap-1 text-sm font-bold bg-amber-100 px-2 py-1 rounded" title="ヒント">
-                    <Info size={16} /> ヒント
-                  </button>
-                  <button onClick={moveProblemUp} disabled={currentProblemIndex === 0} className="p-1 text-amber-600 hover:bg-amber-200 rounded disabled:opacity-30" title="前に移動"><ArrowUp size={16} /></button>
-                  <button onClick={moveProblemDown} disabled={currentProblemIndex === problems.length - 1} className="p-1 text-amber-600 hover:bg-amber-200 rounded disabled:opacity-30" title="後ろに移動"><ArrowDown size={16} /></button>
-                  <button onClick={renumberProblems} className="p-1 text-amber-600 hover:bg-amber-200 rounded" title="問題番号を順番通りに振り直す"><ListOrdered size={16} /></button>
-                  <button onClick={duplicateProblem} className="p-1 text-amber-600 hover:bg-amber-200 rounded" title="この問題を複製"><Copy size={16} /></button>
-                  <button onClick={deleteProblem} className="p-1 text-red-500 hover:bg-red-100 rounded" title="この問題を削除"><Trash2 size={16} /></button>
-                  <button 
-                    onClick={toggleEditMode}
-                    className={`flex items-center gap-1 text-sm px-2 py-1 rounded transition-colors ${isEditMode ? 'bg-amber-600 text-white' : 'bg-amber-200 text-amber-800 hover:bg-amber-300'} ml-auto`}
-                    title="盤面を編集する"
-                  >
-                    {isEditMode ? <Check size={14} /> : <Edit2 size={14} />}
-                    {isEditMode ? '編集完了' : '盤面を修正'}
-                  </button>
-                </div>
-              )}
-            </div>
+          <section className="bg-white/60 p-4 sm:p-6 rounded-xl border border-amber-200 shadow-sm flex flex-col gap-4">
+            {!isEditMode && (
+              <div className="flex justify-end border-b border-amber-900/10 pb-4">
+                <button 
+                  onClick={toggleEditMode}
+                  className="flex items-center gap-1 text-sm px-3 py-1.5 rounded transition-colors bg-amber-200 text-amber-800 hover:bg-amber-300 font-bold"
+                  title="盤面を編集する"
+                >
+                  <Edit2 size={14} /> 盤面を修正
+                </button>
+              </div>
+            )}
+
+            {isEditMode ? (
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-amber-700 block uppercase tracking-wider">問題タイトル</label>
+                <input
+                  type="text"
+                  value={currentProblem.title}
+                  onChange={(e) => {
+                    const updatedProblems = [...problems];
+                    updatedProblems[currentProblemIndex] = {
+                      ...currentProblem,
+                      title: e.target.value,
+                    };
+                    setProblems(updatedProblems);
+                  }}
+                  className="w-full text-xl font-bold p-2 border border-amber-300 rounded-lg bg-white text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  placeholder="問題のタイトルを入力"
+                />
+              </div>
+            ) : null}
 
             {isEditMode ? (
               <div className="space-y-2">
@@ -1601,6 +1594,19 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
               <p className="text-amber-800 leading-relaxed whitespace-pre-wrap">
                 {currentProblem.description}
               </p>
+            )}
+
+            {!isEditMode && (
+              <div className="flex items-center gap-2 flex-wrap pt-2">
+                <button onClick={() => setShowInfo(!showInfo)} className="text-amber-600 hover:text-amber-800 flex items-center gap-1 text-sm font-bold bg-amber-100 px-2 py-1 rounded" title="ヒント">
+                  <Info size={16} /> ヒント
+                </button>
+                <button onClick={moveProblemUp} disabled={currentProblemIndex === 0} className="p-1 text-amber-600 hover:bg-amber-200 rounded disabled:opacity-30" title="前に移動"><ArrowUp size={16} /></button>
+                <button onClick={moveProblemDown} disabled={currentProblemIndex === problems.length - 1} className="p-1 text-amber-600 hover:bg-amber-200 rounded disabled:opacity-30" title="後ろに移動"><ArrowDown size={16} /></button>
+                <button onClick={renumberProblems} className="p-1 text-amber-600 hover:bg-amber-200 rounded" title="問題番号を順番通りに振り直す"><ListOrdered size={16} /></button>
+                <button onClick={duplicateProblem} className="p-1 text-amber-600 hover:bg-amber-200 rounded" title="この問題を複製"><Copy size={16} /></button>
+                <button onClick={deleteProblem} className="p-1 text-red-500 hover:bg-red-100 rounded" title="この問題を削除"><Trash2 size={16} /></button>
+              </div>
             )}
           </section>
 
