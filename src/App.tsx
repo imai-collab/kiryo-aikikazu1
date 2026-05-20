@@ -1463,7 +1463,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
       )}
 
       <div className="w-full bg-amber-200 py-2 px-4 flex justify-center items-center border-b-2 border-amber-900/20 shrink-0 shadow-sm">
-        <span className="text-amber-950 font-black text-base sm:text-lg tracking-wide">©kiryoオリジナル詰将棋アプリ　合きかず</span>
+        <span className="text-amber-950 font-black text-base sm:text-lg tracking-wide">©kiryoオリジナル詰将棋アプリ　２手詰③</span>
       </div>
       <header className="w-full flex-none px-2 sm:px-4 py-2 flex items-center justify-between shadow-sm z-10 bg-white/50 backdrop-blur-sm border-b border-amber-900/10">
         <button
@@ -1515,7 +1515,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
       </header>
 
       <main className="flex-1 w-full min-h-0 flex flex-col items-center p-2 relative overflow-hidden">
-        <div className="w-full max-w-lg flex flex-col gap-1 sm:gap-2 sm:gap-4 items-center justify-start h-full pb-16 pt-1 sm:pt-4 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="w-full max-w-lg flex flex-col gap-1 sm:gap-2 items-center justify-start h-full pt-1 sm:pt-2 overflow-hidden">
           {/* Gote Hand (Top) */}
             <div className="w-full max-w-full sm:max-w-[480px] flex flex-row px-0 sm:px-2">
               <div className="w-full bg-amber-900/5 p-1 sm:p-3 rounded-lg sm:rounded-xl border border-amber-900/10 min-h-[40px] flex flex-row items-center gap-2 sm:gap-4">
@@ -1608,8 +1608,8 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
             </div>
 
             {/* Comment Section below buttons */}
-            <div className="w-full max-w-[600px] px-2 sm:px-0 mt-2 text-center z-10 shrink-0 pb-8">
-              <p className="text-sm sm:text-base text-amber-950 whitespace-pre-wrap leading-relaxed font-bold bg-white/60 p-2 sm:p-3 rounded-xl border border-amber-900/10 shadow-sm">
+            <div className="w-full max-w-[600px] px-2 sm:px-0 mt-1 text-center z-10 shrink-0">
+              <p className="text-sm sm:text-base text-amber-950 truncate font-bold bg-white/60 p-2 sm:p-3 rounded-xl border border-amber-900/10 shadow-sm" title={currentProblem.description || "解説はありません"}>
                 {currentProblem.description || "解説はありません"}
               </p>
             </div>
@@ -1898,10 +1898,6 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
                     </div>
                   )}
                 </div>
-
-                <footer className="text-center text-amber-900 font-bold text-sm py-4 pb-8">
-                  ©kiryoオリジナル詰将棋アプリ　２手詰③
-                </footer>
               </div>
             </motion.div>
           </motion.div>
