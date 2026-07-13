@@ -11,7 +11,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from '@google/genai';
 import { solveTsumeShogi, Move as SolverMove } from './lib/solver';
 import problemsData from './data/problems.json';
-import settingsData from './data/settings.json';
+import datasetsJson from './data/datasets.json';
 
 // Handle different export styles of shogi.js
 const Shogi = (ShogiModule as any).Shogi || (ShogiModule as any).default || ShogiModule;
@@ -103,7 +103,7 @@ interface Problem {
   solution?: Move[]; // Sequence of correct moves (user, response, user...)
 }
 
-const INITIAL_PROBLEMS: Problem[] = problemsData as Problem[];
+const INITIAL_PROBLEMS: Problem[] = (problemsData as any).problems || ((problemsData as any).length ? problemsData : []) as Problem[];
 
 const applyMoveToShogi = (shogiObj: any, move: Move) => {
   if (move.from) {
@@ -220,10 +220,11 @@ const getLegalMoves = (currentShogi: any, color: Color): Move[] => {
   return legalMoves;
 };
 
-const findBestDefenderMove = (currentShogi: any, maxDepth: number, aiMoveHistoryMap: Record<string, Move>): { bestMove: Move | null, steps: number, mate: boolean, mateCount?: number, timeout?: boolean } => {
+const findBestDefenderMove = (currentShogi: any, maxDepth: number, solvedAiMovesMap: Record<string, Move[]>, preferredAiMovesMap: Record<string, Move>): { bestMove: Move | null, steps: number, mate: boolean, mateCount?: number, timeout?: boolean } => {
   const memo = new Map<string, { steps: number, mate: boolean, bestMove: Move | null, mateCount?: number, timeout?: boolean }>();
   const startTime = Date.now();
   const TIME_LIMIT_MS = 3000;
+
 
   function search(depth: number, isBlack: boolean): { steps: number, mate: boolean, bestMove: Move | null, mateCount?: number, timeout?: boolean } {
     if (Date.now() - startTime > TIME_LIMIT_MS) {
@@ -240,6 +241,18 @@ const findBestDefenderMove = (currentShogi: any, maxDepth: number, aiMoveHistory
 
     const color = isBlack ? Color.Black : Color.White;
     let legalMoves = getLegalMoves(currentShogi, color);
+
+    if (!isBlack && depth === maxDepth) {
+      const prefMove = preferredAiMovesMap[sfen];
+      if (prefMove) {
+        const isLegal = legalMoves.some(m => 
+          m.from?.x === prefMove.from?.x && m.from?.y === prefMove.from?.y && m.to.x === prefMove.to.x && m.to.y === prefMove.to.y && m.piece === prefMove.piece && m.promote === prefMove.promote
+        );
+        if (isLegal) {
+          return { steps: 1, mate: false, bestMove: prefMove, mateCount: 0, timeout: false };
+        }
+      }
+    }
 
     // Sort moves to evaluate promising moves first, avoiding timeout with obscure moves
     const PIECE_VALUES: Record<string, number> = {
@@ -275,6 +288,7 @@ const findBestDefenderMove = (currentShogi: any, maxDepth: number, aiMoveHistory
             const distBefore = Math.abs(m.from.x - myKingPos.x) + Math.abs(m.from.y - myKingPos.y);
             const distAfter = Math.abs(m.to.x - myKingPos.x) + Math.abs(m.to.y - myKingPos.y);
             if (distAfter < distBefore) score += 5; // Moving closer to own king
+            if (piece.kind === 'OU') score += 15; // Give King moves higher exploration priority to avoid being starved by timeout
           } else if (piece && isBlack) {
              const distBefore = Math.abs(m.from.x - enemyKingPos.x) + Math.abs(m.from.y - enemyKingPos.y);
              const distAfter = Math.abs(m.to.x - enemyKingPos.x) + Math.abs(m.to.y - enemyKingPos.y);
@@ -287,13 +301,13 @@ const findBestDefenderMove = (currentShogi: any, maxDepth: number, aiMoveHistory
           score += dropVal;
           if (!isBlack) {
              const dist = Math.abs(m.to.x - myKingPos.x) + Math.abs(m.to.y - myKingPos.y);
-             if (dist <= 2) score += 15; // Defending near king
+             if (dist <= 2) score += 5; // Defending near king, lowered to not overshadow escaping
           } else {
              const dist = Math.abs(m.to.x - enemyKingPos.x) + Math.abs(m.to.y - enemyKingPos.y);
              if (dist <= 2) score += 15;
           }
         }
-        return score;
+        return score + Math.random() * 5; // Add randomness to ensure different move ordering across evaluations prioritizing exploration uniformly
       };
       return scoreMove(b) - scoreMove(a);
     });
@@ -431,7 +445,7 @@ const findBestDefenderMove = (currentShogi: any, maxDepth: number, aiMoveHistory
       }
 
       const sfenKey = currentShogi.toSFENString(1);
-      const previousMove = aiMoveHistoryMap[sfenKey];
+      const previousMoves = solvedAiMovesMap[sfenKey] || [];
 
       const PIECE_VALUES: Record<string, number> = {
         FU: 1, KY: 3, KE: 4, GI: 6, KI: 7, KA: 10, HI: 12,
@@ -453,24 +467,16 @@ const findBestDefenderMove = (currentShogi: any, maxDepth: number, aiMoveHistory
          if (m.from) {
              const captured = currentShogi.get(m.to.x, m.to.y);
              if (captured) {
-                score += (PIECE_VALUES[captured.kind] || 1) * 20;
+                score += (PIECE_VALUES[captured.kind] || 1) * 20; // Captures are still strictly good to prioritize
              }
-             const p = currentShogi.get(m.from.x, m.from.y);
-             if (p && ['KI', 'GI', 'FU', 'KA', 'HI'].includes(p.kind)) {
-                 const distBefore = Math.abs(m.from.x - goteKingPos.x) + Math.abs(m.from.y - goteKingPos.y);
-                 const distAfter = Math.abs(m.to.x - goteKingPos.x) + Math.abs(m.to.y - goteKingPos.y);
-                 if (distAfter < distBefore) score += 15;
-             }
-             if (p && p.kind === 'OU') score += 10; // slightly prefer king moving away from danger
-         } else {
-             score -= 10; // Penalty for dropping a piece
-             const dist = Math.abs(m.to.x - goteKingPos.x) + Math.abs(m.to.y - goteKingPos.y);
-             if (dist <= 2) score += 30; // Strongly prefer dropping near King
          }
-         // Prevent repeating the same move immediately
-         if (previousMove && m.from?.x === previousMove.from?.x && m.from?.y === previousMove.from?.y && m.to.x === previousMove.to.x && m.to.y === previousMove.to.y && m.piece === previousMove.piece && m.promote === previousMove.promote) {
-           score -= 100;
-         }
+         
+         // Only penalize used moves to ensure variation
+         const usedCount = previousMoves.filter(pm => 
+           m.from?.x === pm.from?.x && m.from?.y === pm.from?.y && m.to.x === pm.to.x && m.to.y === pm.to.y && m.piece === pm.piece && m.promote === pm.promote
+         ).length;
+         score -= usedCount * 1000;
+
          return score + Math.random();
       };
 
@@ -515,63 +521,38 @@ const findBestDefenderMove = (currentShogi: any, maxDepth: number, aiMoveHistory
   return search(maxDepth, false);
 };
 
+interface DataSet {
+  id: string;
+  title: string;
+  appTitle: string;
+  problems: Problem[];
+  timestamp: number;
+}
+
 export default function App() {
-  const [appTitle, setAppTitle] = useState(settingsData.title || '詰将棋マスター');
+  const defaultTitle = (problemsData as any).appTitle || '詰将棋マスター';
+  const [appTitle, setAppTitle] = useState(defaultTitle);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState('');
-
-  useEffect(() => {
-    const fetchSettings = async () => {
-      const localTitle = localStorage.getItem('tsumeShogiAppTitle');
-      let apiTitle: string | null = null;
-      try {
-        const res = await fetch('/api/settings');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.title) {
-            apiTitle = data.title;
-          }
-        }
-      } catch (e) {
-        console.error("Failed to fetch settings from API", e);
-      }
-
-      const isApiDefault = apiTitle === settingsData.title;
-      
-      if (apiTitle && !isApiDefault) {
-        setAppTitle(apiTitle);
-        localStorage.setItem('tsumeShogiAppTitle', apiTitle);
-      } else if (localTitle && localTitle !== settingsData.title) {
-        setAppTitle(localTitle);
-        fetch('/api/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: localTitle })
-        }).catch(() => {});
-      } else if (apiTitle) {
-        setAppTitle(apiTitle);
-      } else if (localTitle) {
-        setAppTitle(localTitle);
-      }
-    };
-    fetchSettings();
-  }, []);
 
   const handleTitleSave = () => {
     if (tempTitle.trim()) {
       const newTitle = tempTitle.trim();
       setAppTitle(newTitle);
       localStorage.setItem('tsumeShogiAppTitle', newTitle);
-      fetch('/api/settings', {
+      // We will trigger a save to problems.json via the problems effect
+      // so we don't need a separate /api/settings fetch here.
+      fetch('/api/problems', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: newTitle })
-      }).catch(e => console.error("Failed to save settings to API", e));
+        body: JSON.stringify({ appTitle: newTitle, problems })
+      }).catch(e => console.error("Failed to save title", e));
     }
     setIsEditingTitle(false);
   };
 
   const [problems, setProblems] = useState<Problem[]>([]);
+  const [savedDataSets, setSavedDataSets] = useState<DataSet[]>([]);
   const [isLoadingProblems, setIsLoadingProblems] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [currentProblemIndex, setCurrentProblemIndex] = useState(0);
@@ -587,12 +568,19 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [pendingPromotionMove, setPendingPromotionMove] = useState<Move | null>(null);
   const [sfenHistory, setSfenHistory] = useState<string[]>([]);
-  const [aiMoveHistoryMap, setAiMoveHistoryMap] = useState<Record<string, Move>>({});
+  const [failedProblemIds, setFailedProblemIds] = useState<number[]>([]);
+  const [isTimerReviewPhase, setIsTimerReviewPhase] = useState(false);
+  const [resetCounts, setResetCounts] = useState<Record<number, number>>({});
+  const [resetTrigger, setResetTrigger] = useState(0);
+  const [solvedAiMovesMap, setSolvedAiMovesMap] = useState<Record<string, Move[]>>({});
+  const [preferredAiMovesMap, setPreferredAiMovesMap] = useState<Record<string, Move>>({});
+  const [solvedProblems, setSolvedProblems] = useState<number[]>([]);
   
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
+  const datasetsJsonFileInputRef = useRef<HTMLInputElement>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ message: string, onConfirm: () => void } | null>(null);
   const [alertDialog, setAlertDialog] = useState<string | null>(null);
@@ -600,20 +588,195 @@ export default function App() {
   const [sfenInput, setSfenInput] = useState('');
   const [editTool, setEditTool] = useState<{ kind: string, color: Color } | 'eraser' | null>(null);
   const [isToolbarOpen, setIsToolbarOpen] = useState(false);
+  const [showStartupModal, setShowStartupModal] = useState(true);
+  const [showProgressModal, setShowProgressModal] = useState(false);
+  
+  const [isRandomOrder, setIsRandomOrder] = useState<boolean>(() => {
+    return localStorage.getItem('tsumeShogiRandomOrder') === 'true';
+  });
+
+  const [timerRemaining, setTimerRemaining] = useState<number | null>(null);
+  const [isTimerRunning, setIsTimerRunning] = useState(false);
+  const [showTimerFinished, setShowTimerFinished] = useState(false);
+
+  useEffect(() => {
+    let intervalId: any;
+    if (isTimerRunning && timerRemaining !== null && timerRemaining > 0) {
+      intervalId = setInterval(() => {
+        setTimerRemaining((prev) => {
+          if (prev === null) return null;
+          if (prev <= 1) {
+            setIsTimerRunning(false);
+            setShowTimerFinished(true);
+            return null;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(intervalId);
+  }, [isTimerRunning, timerRemaining]);
+
+  const startTimer = () => {
+    setTimerRemaining(300); // 5 minutes
+    setIsTimerRunning(true);
+    setShowTimerFinished(false);
+    setFailedProblemIds([]);
+    setIsTimerReviewPhase(false);
+    setCurrentProblemIndex(0);
+  };
+
+  const stopTimer = () => {
+    setIsTimerRunning(false);
+    setTimerRemaining(null);
+  };
+
+  const loadDataSetFromStartup = async (dataset: DataSet) => {
+    setProblems(dataset.problems);
+    setAppTitle(dataset.appTitle);
+    localStorage.setItem('tsumeShogiAppTitle', dataset.appTitle);
+    
+    const shouldRandom = localStorage.getItem('tsumeShogiRandomOrder') === 'true';
+    if (shouldRandom && dataset.problems.length > 0) {
+      setCurrentProblemIndex(Math.floor(Math.random() * dataset.problems.length));
+    } else {
+      setCurrentProblemIndex(0);
+    }
+    
+    setResetTrigger(prev => prev + 1);
+    
+    // Sync app mode problems back to server
+    try {
+      await fetch('/api/problems', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appTitle: dataset.appTitle, problems: dataset.problems })
+      });
+    } catch (e) {
+      console.error("Failed to save loaded dataset to current problems server state", e);
+    }
+
+    setAlertDialog('データを読み込みました。');
+    setShowStartupModal(false);
+  };
+
+  const saveCurrentDataSet = async () => {
+    let currentDataToCopy = problems;
+    if (shogi) {
+      const currentSfen = shogi.toSFENString(1);
+      currentDataToCopy = [...problems];
+      currentDataToCopy[currentProblemIndex] = {
+        ...currentProblem,
+        initialSfen: currentSfen
+      };
+    }
+
+    const newDataSet: DataSet = {
+      id: Date.now().toString(),
+      title: `${appTitle} (${new Date().toLocaleDateString()})`,
+      appTitle: appTitle,
+      problems: currentDataToCopy,
+      timestamp: Date.now()
+    };
+
+    const updated = [newDataSet, ...savedDataSets];
+    setSavedDataSets(updated);
+    localStorage.setItem('tsumeShogiSavedDataSets', JSON.stringify(updated));
+
+    // Save to server
+    try {
+      await fetch('/api/datasets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated)
+      });
+    } catch (e) {
+      console.error("Failed to save datasets to server", e);
+    }
+
+    setProblems(currentDataToCopy);
+    setAlertDialog('現在のデータをアプリ内に保存しました！');
+  };
+
+  const loadDataSet = (dataset: DataSet) => {
+    setConfirmDialog({
+      message: `「${dataset.title}」を読み込みますか？現在のデータは上書きされます。`,
+      onConfirm: async () => {
+        setProblems(dataset.problems);
+        setAppTitle(dataset.appTitle);
+        localStorage.setItem('tsumeShogiAppTitle', dataset.appTitle);
+        
+        const shouldRandom = localStorage.getItem('tsumeShogiRandomOrder') === 'true';
+        if (shouldRandom && dataset.problems.length > 0) {
+          setCurrentProblemIndex(Math.floor(Math.random() * dataset.problems.length));
+        } else {
+          setCurrentProblemIndex(0);
+        }
+        
+        setResetTrigger(prev => prev + 1);
+        
+        // Sync app mode problems back to server
+        try {
+          await fetch('/api/problems', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appTitle: dataset.appTitle, problems: dataset.problems })
+          });
+        } catch (e) {
+          console.error("Failed to save loaded dataset to current problems server state", e);
+        }
+
+        setAlertDialog('データを読み込みました。');
+      }
+    });
+  };
+
+  const deleteDataSet = async (datasetId: string) => {
+    setConfirmDialog({
+      message: 'この保存データを削除しますか？',
+      onConfirm: async () => {
+        const updated = savedDataSets.filter(ds => ds.id !== datasetId);
+        setSavedDataSets(updated);
+        localStorage.setItem('tsumeShogiSavedDataSets', JSON.stringify(updated));
+
+        try {
+          await fetch('/api/datasets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updated)
+          });
+        } catch (e) {
+          console.error("Failed to delete dataset on server", e);
+        }
+      }
+    });
+  };
 
   useEffect(() => {
     const fetchProblems = async () => {
       let apiProblems: Problem[] | null = null;
+      let apiAppTitle: string | null = null;
       try {
         const res = await fetch('/api/problems');
         if (res.ok) {
           const data = await res.json();
-          if (data && data.length > 0) {
+          if (Array.isArray(data) && data.length > 0) {
             apiProblems = data;
+          } else if (data && data.problems && data.problems.length > 0) {
+            apiProblems = data.problems;
+            if (data.appTitle) apiAppTitle = data.appTitle;
           }
         }
       } catch (e) {
         console.error("Failed to fetch problems from API", e);
+      }
+
+      if (apiAppTitle) {
+        setAppTitle(apiAppTitle);
+        localStorage.setItem('tsumeShogiAppTitle', apiAppTitle);
+      } else {
+        const localTitle = localStorage.getItem('tsumeShogiAppTitle');
+        if (localTitle) setAppTitle(localTitle);
       }
 
       const saved = localStorage.getItem('tsumeShogiProblems');
@@ -621,31 +784,110 @@ export default function App() {
       if (saved) {
         try {
           localProblems = JSON.parse(saved);
+          if (!Array.isArray(localProblems) && (localProblems as any).problems) {
+            localProblems = (localProblems as any).problems;
+          }
         } catch (e) {
           console.error("Failed to parse saved problems", e);
         }
       }
 
-      // Handling ephemeral Dev Server resets:
-      // If API returns default data, but we have local backup, restore local!
-      const isApiDefault = JSON.stringify(apiProblems) === JSON.stringify(INITIAL_PROBLEMS);
+      try {
+        const dsRes = await fetch('/api/datasets');
+        let fetchedDataSets: any[] = [];
+        if (dsRes.ok) {
+          const dsData = await dsRes.json();
+          if (Array.isArray(dsData)) {
+            fetchedDataSets = dsData;
+          }
+        }
+        
+        // Merge datasetsJson with API data to ensure src/data/datasets.json is always available
+        const localSources = Array.isArray(datasetsJson) ? datasetsJson : [];
+        const mergedMap = new Map();
+        
+        // Add JSON file datasets first
+        localSources.forEach((ds: any) => {
+          if (ds && ds.id) mergedMap.set(ds.id, ds);
+        });
+        
+        // Override with API datasets (user modifications/saves)
+        fetchedDataSets.forEach((ds: any) => {
+          if (ds && ds.id) mergedMap.set(ds.id, ds);
+        });
+        
+        const finalDatasets = Array.from(mergedMap.values());
+        
+        if (finalDatasets.length > 0) {
+          setSavedDataSets(finalDatasets);
+          localStorage.setItem('tsumeShogiSavedDataSets', JSON.stringify(finalDatasets));
+          // Don't auto-post back to api/datasets here unless necessary to prevent accidental overwrites of datasets.json
+        } else {
+          // Fallback to local storage if somehow empty
+          const savedSets = localStorage.getItem('tsumeShogiSavedDataSets');
+          if (savedSets) {
+            try {
+              const parsed = JSON.parse(savedSets);
+              setSavedDataSets(parsed);
+            } catch (e) {
+              console.error(e);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch datasets", e);
+        // Fallback merging local json and local storage
+        const localSources = Array.isArray(datasetsJson) ? datasetsJson : [];
+        const mergedMap = new Map();
+        localSources.forEach((ds: any) => {
+          if (ds && ds.id) mergedMap.set(ds.id, ds);
+        });
+        
+        const savedSets = localStorage.getItem('tsumeShogiSavedDataSets');
+        if (savedSets) {
+          try {
+            const parsed = JSON.parse(savedSets);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((ds) => {
+                if (ds && ds.id) mergedMap.set(ds.id, ds);
+              });
+            }
+          } catch (err) {}
+        }
+        setSavedDataSets(Array.from(mergedMap.values()));
+      }
+
+      // Always trust API data over INITIAL_PROBLEMS
       const hasLocalData = localProblems && localProblems.length > 0;
+      let loadedProblems = INITIAL_PROBLEMS;
       
-      if (apiProblems && apiProblems.length > 0 && !isApiDefault) {
+      if (apiProblems && apiProblems.length > 0) {
         setProblems(apiProblems);
+        loadedProblems = apiProblems;
         localStorage.setItem('tsumeShogiProblems', JSON.stringify(apiProblems));
       } else if (hasLocalData) {
-        setProblems(localProblems);
+        setProblems(localProblems!);
+        loadedProblems = localProblems!;
         // Sync to API so server is updated again
         fetch('/api/problems', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(localProblems)
+          body: JSON.stringify({ appTitle: apiAppTitle || defaultTitle, problems: localProblems })
         }).catch(() => {});
-      } else if (apiProblems && apiProblems.length > 0) {
-        setProblems(apiProblems);
       } else {
         setProblems(INITIAL_PROBLEMS);
+        localStorage.setItem('tsumeShogiProblems', JSON.stringify(INITIAL_PROBLEMS));
+        // Seed API
+        fetch('/api/problems', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appTitle: apiAppTitle || defaultTitle, problems: INITIAL_PROBLEMS })
+        }).catch(() => {});
+      }
+      
+      const shouldRandom = localStorage.getItem('tsumeShogiRandomOrder') === 'true';
+      if (shouldRandom && loadedProblems.length > 0) {
+        setCurrentProblemIndex(Math.floor(Math.random() * loadedProblems.length));
       }
       
       setIsLoadingProblems(false);
@@ -664,7 +906,7 @@ export default function App() {
       fetch('/api/problems', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(problems)
+        body: JSON.stringify({ appTitle, problems })
       })
       .then(res => {
         if (!res.ok) throw new Error("Save failed");
@@ -683,6 +925,48 @@ export default function App() {
   }, [problems, isLoadingProblems]);
 
   const currentProblem = problems[currentProblemIndex];
+
+  const goToNextProblem = useCallback(() => {
+    if (isTimerRunning) {
+      if (!isTimerReviewPhase && currentProblemIndex < problems.length - 1) {
+        setCurrentProblemIndex(prev => prev + 1);
+      } else {
+        if (!isTimerReviewPhase) {
+          setIsTimerReviewPhase(true);
+        }
+        if (failedProblemIds.length > 0) {
+          const nextFailedId = failedProblemIds[0];
+          const nextIdx = problems.findIndex(p => p.id === nextFailedId);
+          if (nextIdx !== -1) {
+            setCurrentProblemIndex(nextIdx);
+            setFailedProblemIds(prev => prev.slice(1));
+          }
+        }
+      }
+      return;
+    }
+
+    if (isRandomOrder) {
+      const unsolvedIndices = problems
+        .map((p, idx) => ({ idx, id: p.id }))
+        .filter(entry => !solvedProblems.includes(entry.id) && entry.idx !== currentProblemIndex)
+        .map(entry => entry.idx);
+
+      if (unsolvedIndices.length > 0) {
+        const randomIndex = unsolvedIndices[Math.floor(Math.random() * unsolvedIndices.length)];
+        setCurrentProblemIndex(randomIndex);
+      } else {
+        const allIndices = problems.map((_, i) => i).filter(i => i !== currentProblemIndex);
+        if (allIndices.length > 0) {
+           setCurrentProblemIndex(allIndices[Math.floor(Math.random() * allIndices.length)]);
+        } else {
+           setCurrentProblemIndex(prev => Math.min(problems.length - 1, prev + 1));
+        }
+      }
+    } else {
+      setCurrentProblemIndex(prev => Math.min(problems.length - 1, prev + 1));
+    }
+  }, [isRandomOrder, problems, solvedProblems, currentProblemIndex, isTimerRunning, failedProblemIds]);
 
   const handleAddEmptyProblem = () => {
     const newProblem: Problem = {
@@ -713,6 +997,8 @@ export default function App() {
       };
       setProblems(updatedProblems);
       setAlertDialog(`盤面を更新しました。`);
+    } else {
+      setIsToolbarOpen(false);
     }
     setIsEditMode(!isEditMode);
   };
@@ -773,22 +1059,21 @@ export default function App() {
 
   const duplicateProblem = () => {
     const currentSfen = shogi.toSFENString(1);
-    const newProblem = {
-      ...currentProblem,
-      id: Date.now(),
-      title: `${currentProblem.title} (コピー)`,
-      initialSfen: currentSfen,
-    };
     
     setProblems(prev => {
       const updated = [...prev];
-      if (isEditMode) {
-        updated[currentProblemIndex] = {
-          ...currentProblem,
-          initialSfen: currentSfen
-        };
-      }
-      updated.splice(currentProblemIndex + 1, 0, newProblem);
+      updated[currentProblemIndex] = {
+        ...updated[currentProblemIndex],
+        initialSfen: currentSfen
+      };
+      
+      const newProblemToInsert = {
+        ...updated[currentProblemIndex],
+        id: Date.now(),
+        title: `${updated[currentProblemIndex].title} (コピー)`
+      };
+      
+      updated.splice(currentProblemIndex + 1, 0, newProblemToInsert);
       return updated.map((p, idx) => ({ ...p, id: idx + 1 }));
     });
     setCurrentProblemIndex(currentProblemIndex + 1);
@@ -797,7 +1082,7 @@ export default function App() {
 
   const copyAllData = async () => {
     let currentDataToCopy = problems;
-    if (isEditMode && shogi) {
+    if (shogi) {
       const currentSfen = shogi.toSFENString(1);
       currentDataToCopy = [...problems];
       currentDataToCopy[currentProblemIndex] = {
@@ -808,7 +1093,11 @@ export default function App() {
     }
     
     try {
-      await navigator.clipboard.writeText(JSON.stringify(currentDataToCopy, null, 2));
+      const exportData = {
+        appTitle,
+        problems: currentDataToCopy
+      };
+      await navigator.clipboard.writeText(JSON.stringify(exportData, null, 2));
       setAlertDialog('すべての問題データをクリップボードにコピーしました！');
     } catch (err) {
       setAlertDialog('クリップボードへのコピーに失敗しました。');
@@ -824,12 +1113,30 @@ export default function App() {
       try {
         const text = event.target?.result as string;
         const parsed = JSON.parse(text);
-        if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0].id !== 'undefined') {
+        let importedProblems = parsed;
+        let importedTitle = null;
+
+        if (!Array.isArray(parsed) && parsed.problems) {
+          importedProblems = parsed.problems;
+          if (parsed.appTitle) importedTitle = parsed.appTitle;
+        }
+
+        if (Array.isArray(importedProblems) && importedProblems.length > 0 && typeof importedProblems[0].id !== 'undefined') {
           setConfirmDialog({
             message: 'JSONデータをインポートしますか？現在のデータはすべて上書きされます。',
             onConfirm: () => {
-              setProblems(parsed);
-              setCurrentProblemIndex(0);
+              setProblems(importedProblems);
+              if (importedTitle) {
+                setAppTitle(importedTitle);
+                localStorage.setItem('tsumeShogiAppTitle', importedTitle);
+              }
+              const shouldRandom = localStorage.getItem('tsumeShogiRandomOrder') === 'true';
+              if (shouldRandom && importedProblems.length > 0) {
+                setCurrentProblemIndex(Math.floor(Math.random() * importedProblems.length));
+              } else {
+                setCurrentProblemIndex(0);
+              }
+              setResetTrigger(prev => prev + 1);
               setAlertDialog('データをインポートしました。');
             }
           });
@@ -840,6 +1147,54 @@ export default function App() {
         setUploadError('JSONデータの読み込みに失敗しました。ファイルが破損している可能性があります。');
       }
       if (jsonFileInputRef.current) jsonFileInputRef.current.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  const copyAllDataSets = async () => {    
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(savedDataSets, null, 2));
+      setAlertDialog('保存済みの全データをクリップボードにコピーしました！');
+    } catch (err) {
+      setAlertDialog('クリップボードへのコピーに失敗しました。');
+    }
+  };
+
+  const handleDataSetsJsonImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+        
+        if (Array.isArray(parsed)) {
+          setConfirmDialog({
+            message: '保存済みのデータセットをインポートしますか？現在の保存済みデータはすべて上書きされます。',
+            onConfirm: async () => {
+              setSavedDataSets(parsed);
+              localStorage.setItem('tsumeShogiSavedDataSets', JSON.stringify(parsed));
+              try {
+                await fetch('/api/datasets', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(parsed)
+                });
+              } catch (e) {
+                console.error("Failed to save datasets to server", e);
+              }
+              setAlertDialog('保存済みデータセットをインポートしました。');
+            }
+          });
+        } else {
+          setUploadError('無効なデータセットJSONデータです。');
+        }
+      } catch(err) {
+        setUploadError('JSONデータの読み込みに失敗しました。ファイルが破損している可能性があります。');
+      }
+      if (datasetsJsonFileInputRef.current) datasetsJsonFileInputRef.current.value = '';
     };
     reader.readAsText(file);
   };
@@ -967,6 +1322,23 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
     }
   };
 
+  useEffect(() => {
+    if (isGameOver && isTimerRunning) {
+      if (message !== 'CORRECT') {
+        setFailedProblemIds(prev => {
+          if (!prev.includes(currentProblem.id)) {
+            return [...prev, currentProblem.id];
+          }
+          return prev;
+        });
+        const timer = setTimeout(() => {
+          goToNextProblem();
+        }, 1500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [isGameOver, isTimerRunning, message, currentProblem?.id, goToNextProblem]);
+
   const resetGame = useCallback(() => {
     if (!currentProblem) return;
     
@@ -1014,7 +1386,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
   const handleChangeGoteMove = useCallback(() => {
     if (moveHistory.length === 0) return;
-    const isSentesTurn = moveHistory.length % 2 !== 0;
+    const isSentesTurn = moveHistory.length % 2 === 0;
     
     if (!isSentesTurn) return;
 
@@ -1045,14 +1417,15 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
   useEffect(() => {
     resetGame();
-  }, [resetGame]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProblem?.id, currentProblemIndex, resetTrigger]);
 
   if (isLoadingProblems) {
     return (
-      <div className="min-h-screen bg-[#fdf6e3] flex items-center justify-center">
+      <div className="min-h-screen bg-[#1A2F24] flex items-center justify-center">
         <div className="animate-pulse flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-4 border-amber-800 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-amber-800 font-bold">問題データを読み込み中...</p>
+          <p className="text-white font-bold">問題データを読み込み中...</p>
         </div>
       </div>
     );
@@ -1060,11 +1433,11 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
   if (error) {
     return (
-      <div className="min-h-screen bg-[#fdf6e3] flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#1A2F24] flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-xl border border-red-100 text-center max-w-md">
           <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-amber-950 mb-2">エラーが発生しました</h1>
-          <p className="text-amber-800/70 mb-6">{error}</p>
+          <h1 className="text-2xl font-bold text-stone-900 mb-2">エラーが発生しました</h1>
+          <p className="text-stone-800/70 mb-6">{error}</p>
           <div className="flex flex-col gap-3">
             <button onClick={() => window.location.reload()} className="bg-amber-800 text-white px-6 py-2 rounded-xl font-bold hover:bg-amber-900 transition-colors">
               再読み込み
@@ -1075,7 +1448,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
                 fetch('/api/problems', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(INITIAL_PROBLEMS)
+                  body: JSON.stringify({ appTitle: defaultTitle, problems: INITIAL_PROBLEMS })
                 }).then(() => window.location.reload());
               }}
               className="px-6 py-2 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-colors text-sm"
@@ -1090,10 +1463,10 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
   if (!shogi) {
     return (
-      <div className="min-h-screen bg-[#fdf6e3] flex items-center justify-center">
+      <div className="min-h-screen bg-[#1A2F24] flex items-center justify-center">
         <div className="animate-pulse flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-4 border-amber-800 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-amber-800 font-bold">読み込み中...</p>
+          <p className="text-white font-bold">読み込み中...</p>
         </div>
       </div>
     );
@@ -1259,6 +1632,16 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
         setMessage('指す手がありません。失敗です。');
       } else {
         setMessage('CORRECT');
+        setPreferredAiMovesMap({});
+        setSolvedProblems(prev => Array.from(new Set([...prev, currentProblem.id])));
+        setSolvedAiMovesMap(prev => {
+          const newMap = { ...prev };
+          for (let i = 1; i < moveHistory.length; i += 2) {
+            const sfen = sfenHistory[i];
+            if (sfen) newMap[sfen] = [...(newMap[sfen] || []), moveHistory[i]];
+          }
+          return newMap;
+        });
         setShowCorrectSplash(true);
         setTimeout(() => setShowCorrectSplash(false), 1000);
         confetti({
@@ -1271,6 +1654,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
     }
 
     if (isGoteManualEntry) {
+       setPreferredAiMovesMap(prev => ({ ...prev, [sfenBefore]: move }));
        setIsGoteManualEntry(false);
        setMessage('あなたの番です。');
        return;
@@ -1280,10 +1664,9 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
     
     setTimeout(() => {
       const sfenKey = nextShogi.toSFENString(1);
-      const defenderRes = findBestDefenderMove(nextShogi, 3, aiMoveHistoryMap);
+      const defenderRes = findBestDefenderMove(nextShogi, 3, solvedAiMovesMap, preferredAiMovesMap);
       
       if (defenderRes.bestMove) {
-        setAiMoveHistoryMap(prev => ({ ...prev, [sfenKey]: defenderRes.bestMove! }));
         applyMoveToShogi(nextShogi, defenderRes.bestMove);
         const afterGoteSfen = nextShogi.toSFENString(1);
         setSfenHistory(prev => [...prev, afterGoteSfen]);
@@ -1300,6 +1683,16 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
       } else {
         setIsGameOver(true);
         setMessage('CORRECT');
+        setPreferredAiMovesMap({});
+        setSolvedProblems(prev => Array.from(new Set([...prev, currentProblem.id])));
+        setSolvedAiMovesMap(prev => {
+          const newMap = { ...prev };
+          for (let i = 1; i < moveHistory.length; i += 2) {
+            const sfen = sfenHistory[i];
+            if (sfen) newMap[sfen] = [...(newMap[sfen] || []), moveHistory[i]];
+          }
+          return newMap;
+        });
         setShowCorrectSplash(true);
         setTimeout(() => setShowCorrectSplash(false), 1000);
         confetti({
@@ -1325,8 +1718,8 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
             key={`${x}-${y}`}
             onClick={() => handleSquareClick(x, y)}
             className={`
-              relative w-full aspect-square border border-amber-800/30 flex items-center justify-center cursor-pointer
-              ${isSelected ? 'bg-amber-400/50' : isLastMove ? 'bg-amber-200/40' : 'hover:bg-amber-100/30'}
+              relative w-full aspect-square border border-[#4A3123] flex items-center justify-center cursor-pointer
+              ${isSelected ? 'bg-blue-400/50' : isLastMove ? 'bg-blue-300/40' : 'hover:bg-black/10'}
               transition-colors duration-200
             `}
           >
@@ -1339,16 +1732,14 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
                 <div
                   className={`
                     w-full h-full flex items-center justify-center rounded shadow-sm
-                    ${piece.color === Color.Black 
-                      ? 'bg-white border border-amber-800/30' 
-                      : 'border border-transparent'
-                    }
+                    ${piece.color === Color.Black ? 'bg-stone-50' : 'bg-[#FDF0C8]'} border border-stone-700/50
                     transition-all duration-200
                   `}
                 >
                   <span className={`
                     text-xl sm:text-2xl md:text-3xl font-bold select-none
-                    ${piece.color === Color.White ? 'rotate-180 text-amber-900' : 'text-amber-950'}
+                    ${piece.color === Color.White ? 'rotate-180' : ''}
+                    ${["TO", "NY", "NK", "NG", "UM", "RY"].includes(piece.kind) ? 'text-red-700' : 'text-stone-900'}
                   `}>
                     {PIECE_NAMES[piece.kind] || piece.kind}
                   </span>
@@ -1372,23 +1763,24 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
     return (
       <div className="flex flex-row flex-wrap gap-1 sm:gap-2 items-center justify-center">
-        {!isEditMode && pieces.length === 0 && <span className="text-amber-800/40 text-[10px] sm:text-sm italic py-2">なし</span>}
+        {!isEditMode && pieces.length === 0 && <span className="text-black text-[10px] sm:text-sm py-2">なし</span>}
         {pieces.map(([kind, count]) => (
           <div key={kind} className="flex flex-col items-center gap-1">
             <div
               onClick={() => !isEditMode && handleHandClick(kind as string, color)}
               className={`
                 relative flex items-center justify-center rounded
-                ${color === Color.Black ? 'w-[10vw] max-w-[46px] h-[10vw] max-h-[46px] cursor-pointer border border-amber-800/30 bg-white/80 hover:bg-amber-100 shadow-sm' : 'w-8 h-8 sm:w-10 sm:h-10 bg-transparent'}
-                ${selectedHandPiece?.piece === kind && selectedHandPiece?.color === color ? '!bg-amber-400/50' : ''}
+                ${color === Color.Black ? 'w-[10vw] max-w-[46px] h-[10vw] max-h-[46px]' : 'w-8 h-8 sm:w-10 sm:h-10'}
+                cursor-pointer border border-stone-700/50 ${color === Color.Black ? 'bg-stone-50 hover:bg-white' : 'bg-[#FDF0C8] hover:bg-[#F5E2B2]'} shadow-sm
+                ${selectedHandPiece?.piece === kind && selectedHandPiece?.color === color ? '!ring-2 !ring-blue-500' : ''}
                 transition-all duration-200
               `}
             >
-              <span className={`font-bold ${color === Color.White ? 'text-lg sm:text-xl rotate-180 text-amber-900' : 'text-xl sm:text-2xl md:text-3xl text-amber-950'} ${isEditMode && count === 0 ? 'opacity-30' : ''}`}>
+              <span className={`font-bold ${color === Color.White ? 'text-lg sm:text-xl rotate-180' : 'text-xl sm:text-2xl md:text-3xl'} text-stone-900 ${isEditMode && count === 0 ? 'opacity-30' : ''}`}>
                 {PIECE_NAMES[kind as string] || kind}
               </span>
               {(count as number) > 1 && (
-                <span className={`absolute -bottom-1 -right-1 text-[10px] sm:text-xs w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center rounded-full border border-white ${color === Color.White ? 'bg-amber-900 text-white' : 'bg-amber-800 text-white'}`}>
+                <span className={`absolute -bottom-1 -right-1 text-[10px] sm:text-xs w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center rounded-full border border-white bg-stone-800 text-white`}>
                   {count as number}
                 </span>
               )}
@@ -1420,7 +1812,31 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
   };
 
   return (
-    <div className="h-[100dvh] bg-[#fdf6e3] text-amber-950 font-sans flex flex-col items-center overflow-hidden relative">
+    <div className="h-[100dvh] bg-[#1A2F24] text-stone-900 font-sans flex flex-col items-center overflow-hidden relative">
+      {/* Timer Finished Modal */}
+      <AnimatePresence>
+        {showTimerFinished && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 1.1 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none bg-black/30 backdrop-blur-sm"
+          >
+            <div className="bg-red-600 border-[4px] border-red-800 rounded-2xl px-8 py-8 sm:px-12 shadow-2xl flex flex-col items-center gap-4">
+              <span className="text-6xl sm:text-8xl font-black text-white tracking-widest drop-shadow-lg">終了！</span>
+              <span className="text-xl sm:text-2xl font-bold text-white/90">5分が経過しました</span>
+              <button 
+                onClick={() => setShowTimerFinished(false)}
+                className="mt-4 px-6 py-2 bg-white text-red-700 font-bold rounded-full hover:bg-red-100 pointer-events-auto"
+              >
+                閉じる
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Custom Modals */}
       {confirmDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -1462,14 +1878,40 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
         </div>
       )}
 
-      <div className="w-full bg-amber-200 py-2 px-4 flex justify-center items-center border-b-2 border-amber-900/20 shrink-0 shadow-sm">
-        <span className="text-amber-950 font-black text-base sm:text-lg tracking-wide">©kiryoオリジナル詰将棋アプリ　２手詰③</span>
+      <div className="w-full bg-[#2A4C3A] py-2 px-4 flex justify-between items-center border-b-2 border-black/20 shrink-0 shadow-sm">
+        <div className="flex-1"></div>
+        <span className="text-white font-black tracking-wide shrink-0 flex justify-center items-center">
+          {timerRemaining !== null ? (
+            <span className={`font-mono font-black text-3xl sm:text-4xl leading-none tracking-tighter ${timerRemaining <= 60 ? 'text-red-400' : 'text-amber-300'}`}>
+              {Math.floor(timerRemaining / 60)}:{String(timerRemaining % 60).padStart(2, '0')}
+            </span>
+          ) : (
+            <span className="text-base sm:text-lg">{appTitle}</span>
+          )}
+        </span>
+        <div className="flex-1 flex justify-end items-center gap-2">
+          {!isTimerRunning ? (
+            <button
+              onClick={startTimer}
+              className="bg-amber-600 hover:bg-amber-700 text-white text-xs sm:text-sm font-bold px-2 py-1 rounded shadow-sm whitespace-nowrap"
+            >
+              5分タイマー
+            </button>
+          ) : (
+            <button
+              onClick={stopTimer}
+              className="bg-red-600 hover:bg-red-700 text-white text-xs sm:text-sm font-bold px-2 py-1 rounded shadow-sm whitespace-nowrap"
+            >
+              停止
+            </button>
+          )}
+        </div>
       </div>
-      <header className="w-full flex-none px-2 sm:px-4 py-2 flex items-center justify-between shadow-sm z-10 bg-white/50 backdrop-blur-sm border-b border-amber-900/10">
+      <header className="w-full flex-none px-2 sm:px-4 py-2 flex items-center justify-between shadow-sm z-10 bg-[#1A2F24] text-white border-b border-black/20">
         <button
           onClick={() => setCurrentProblemIndex(prev => Math.max(0, prev - 10))}
           disabled={currentProblemIndex === 0}
-          className="p-1 sm:p-2 rounded-full hover:bg-amber-200 disabled:opacity-30 transition-colors"
+          className="p-1 sm:p-2 rounded-full hover:bg-white/20 disabled:opacity-30 transition-colors"
           title="10問戻る"
         >
           <ChevronsLeft className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -1479,25 +1921,25 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
           <button
             onClick={() => setCurrentProblemIndex(prev => Math.max(0, prev - 1))}
             disabled={currentProblemIndex === 0}
-            className="p-1 sm:p-2 rounded-full hover:bg-amber-200 disabled:opacity-30 transition-colors"
+            className="p-1 sm:p-2 rounded-full hover:bg-white/20 disabled:opacity-30 transition-colors"
             title="前の問題"
           >
             <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
           </button>
           
           <div className="flex justify-center items-center gap-2 sm:gap-4 mx-1 sm:mx-2">
-            <h2 className="text-base sm:text-lg md:text-xl font-bold text-amber-900 whitespace-nowrap">
-              {currentProblem.title}
+            <h2 className="text-base sm:text-lg md:text-xl font-bold text-white whitespace-nowrap">
+              {solvedProblems.includes(currentProblem.id) ? '🔴 ' : ''}{currentProblem.title}
             </h2>
-            <span className="font-bold px-3 py-1 bg-amber-200 rounded-full text-xs sm:text-sm whitespace-nowrap text-amber-900">
+            <span className="font-bold px-3 py-1 bg-[#2A4C3A] rounded-full text-xs sm:text-sm whitespace-nowrap text-white">
               問題 {currentProblemIndex + 1} / {problems.length}
             </span>
           </div>
 
           <button
-            onClick={() => setCurrentProblemIndex(prev => Math.min(problems.length - 1, prev + 1))}
-            disabled={currentProblemIndex === problems.length - 1}
-            className="p-1 sm:p-2 rounded-full hover:bg-amber-200 disabled:opacity-30 transition-colors"
+            onClick={goToNextProblem}
+            disabled={(!isRandomOrder && currentProblemIndex === problems.length - 1) && !(isTimerRunning && failedProblemIds.length > 0)}
+            className="p-1 sm:p-2 rounded-full hover:bg-white/20 disabled:opacity-30 transition-colors"
             title="次の問題"
           >
             <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -1507,19 +1949,19 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
         <button
           onClick={() => setCurrentProblemIndex(prev => Math.min(problems.length - 1, prev + 10))}
           disabled={currentProblemIndex === problems.length - 1}
-          className="p-1 sm:p-2 rounded-full hover:bg-amber-200 disabled:opacity-30 transition-colors"
+          className="p-1 sm:p-2 rounded-full hover:bg-white/20 disabled:opacity-30 transition-colors"
           title="10問進む"
         >
           <ChevronsRight className="w-5 h-5 sm:w-6 sm:h-6" />
         </button>
       </header>
 
-      <main className="flex-1 w-full min-h-0 flex flex-col items-center p-2 relative overflow-hidden">
-        <div className="w-full max-w-lg flex flex-col gap-1 sm:gap-2 items-center justify-start h-full pt-1 sm:pt-2 overflow-hidden">
+      <main className={`flex-1 w-full min-h-0 flex flex-col items-center p-2 relative ${isEditMode ? 'overflow-y-auto pb-32' : 'overflow-hidden'}`}>
+        <div className={`w-full max-w-lg flex flex-col gap-1 sm:gap-2 items-center justify-start pt-1 sm:pt-2 ${isEditMode ? 'overflow-visible h-auto min-h-full' : 'overflow-hidden h-full'}`}>
           {/* Gote Hand (Top) */}
             <div className="w-full max-w-full sm:max-w-[480px] flex flex-row px-0 sm:px-2">
-              <div className="w-full bg-amber-900/5 p-1 sm:p-3 rounded-lg sm:rounded-xl border border-amber-900/10 min-h-[40px] flex flex-row items-center gap-2 sm:gap-4">
-                <h3 className="text-xs sm:text-sm font-bold text-amber-900/60 whitespace-nowrap ml-1 sm:ml-0">後手</h3>
+              <div className="w-full bg-[#D1A15B] p-1 sm:p-3 rounded-lg sm:rounded-xl border border-[#D1A15B] min-h-[40px] flex flex-row items-center gap-2 sm:gap-4 shadow-sm">
+                <h3 className="text-xs sm:text-sm font-bold text-black whitespace-nowrap ml-1 sm:ml-0">後手</h3>
                 <div className="flex-1 flex flex-row justify-start flex-wrap">
                   {renderHand(Color.White)}
                 </div>
@@ -1528,13 +1970,13 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
             {/* Board */}
             <div className="flex flex-col items-center w-full">
-              <div className={`relative w-full max-w-[min(100vw-16px,50vh)] p-0 sm:p-2 sm:rounded-lg shadow-sm sm:shadow-2xl border-y-2 sm:border-4 flex-shrink-0 transition-colors ${isEditMode ? 'bg-amber-100 border-amber-500' : 'bg-amber-100 sm:bg-amber-200 border-amber-800/20 sm:border-amber-800/20'}`}>
+              <div className={`relative w-full max-w-[min(100vw-16px,50vh)] p-0 sm:p-2 sm:rounded-lg shadow-sm sm:shadow-2xl flex-shrink-0 transition-colors ${isEditMode ? 'bg-[#D1A15B] border-4 border-amber-500' : 'bg-[#D1A15B] border-2 sm:border-4 border-[#D1A15B]'}`}>
                 {isEditMode && (
-                  <div className="absolute top-0 left-0 right-0 bg-amber-500 text-white text-[10px] sm:text-xs font-bold text-center py-0.5 sm:py-1 sm:rounded-t-sm z-10">
+                  <div className="absolute top-0 left-0 right-0 bg-stone-500 text-white text-[10px] sm:text-xs font-bold text-center py-0.5 sm:py-1 sm:rounded-t-sm z-10">
                     盤面編集モード
                   </div>
                 )}
-                <div className={`grid grid-cols-9 w-full bg-amber-50 border-2 border-amber-900 shadow-inner align-top ${isEditMode ? 'mt-4 sm:mt-4' : ''}`}>
+                <div className={`grid grid-cols-9 w-full bg-[#EFC07E] border-[4px] border-[#D1A15B] shadow-inner align-top ${isEditMode ? 'mt-4 sm:mt-4' : ''}`}>
                   {renderBoard()}
                 </div>
                 <AnimatePresence>
@@ -1558,8 +2000,8 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
             {/* Sente Hand (Bottom) */}
             <div className="w-full max-w-full sm:max-w-[480px] flex flex-row px-0 sm:px-2">
-              <div className="w-full bg-amber-900/5 p-1 sm:p-3 rounded-lg sm:rounded-xl border border-amber-900/10 min-h-[40px] flex flex-row items-center gap-2 sm:gap-4">
-                <h3 className="text-xs sm:text-sm font-bold text-amber-900/60 whitespace-nowrap ml-1 sm:ml-0">先手</h3>
+              <div className="w-full bg-[#D1A15B] p-1 sm:p-3 rounded-lg sm:rounded-xl border border-[#D1A15B] min-h-[40px] flex flex-row items-center gap-2 sm:gap-4 shadow-sm">
+                <h3 className="text-xs sm:text-sm font-bold text-black whitespace-nowrap ml-1 sm:ml-0">先手</h3>
                 <div className="flex-1 flex flex-row justify-center flex-wrap">
                   {renderHand(Color.Black)}
                 </div>
@@ -1567,17 +2009,14 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
             </div>
             
             {/* Message Area moved below Sente Hand */}
-            <div className={`
+              <div className={`
               w-full max-w-full sm:max-w-[480px] p-2 sm:p-4 rounded-lg sm:rounded-xl text-center font-bold text-sm sm:text-lg transition-all duration-300 mx-2 sm:mx-0 shadow-sm
-              ${isGameOver ? 'bg-green-100 text-green-800 scale-105' : 'bg-amber-100 border border-amber-200 text-amber-900'}
+              ${isGameOver ? 'bg-green-100 text-green-800 scale-105' : 'bg-[#FFF9E6] border border-[#E8DCC0] text-[#5A4A32]'}
             `}>
               {message === 'CORRECT' ? (
-                currentProblemIndex < problems.length - 1 ? (
+                (isRandomOrder ? solvedProblems.length < problems.length : (currentProblemIndex < problems.length - 1 || (isTimerRunning && failedProblemIds.length > 0))) ? (
                   <button 
-                    onClick={() => {
-                      setCurrentProblemIndex(prev => prev + 1);
-                      // reset is handled by the useEffect watching currentProblemIndex
-                    }}
+                    onClick={goToNextProblem}
                     className="w-full bg-green-600 text-white py-2 rounded-lg font-bold text-base hover:bg-green-700 transition-colors shadow-sm active:scale-95 flex items-center justify-center gap-2"
                   >
                     次の問題へ <ChevronRight size={18} />
@@ -1592,16 +2031,47 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
             <div className="flex flex-row w-full max-w-full px-2 sm:px-0 sm:max-w-[480px] gap-2 mt-1 sm:mt-0">
               <button
-                onClick={resetGame}
-                className="flex-1 flex items-center justify-center gap-1 sm:gap-2 bg-amber-800 text-white py-1.5 sm:py-3 rounded-lg sm:rounded-xl font-bold text-xs sm:text-base hover:bg-amber-900 transition-colors shadow-sm active:scale-95"
+                onClick={() => {
+                  if (isTimerRunning) {
+                    setResetCounts(prev => ({
+                      ...prev,
+                      [currentProblem.id]: (prev[currentProblem.id] || 0) + 1
+                    }));
+                    setFailedProblemIds(prev => {
+                      if (!prev.includes(currentProblem.id)) {
+                        return [...prev, currentProblem.id];
+                      }
+                      return prev;
+                    });
+                    goToNextProblem();
+                  } else {
+                    if (moveHistory.length > 0 && message !== 'CORRECT') {
+                      setResetCounts(prev => ({
+                        ...prev,
+                        [currentProblem.id]: (prev[currentProblem.id] || 0) + 1
+                      }));
+                    }
+                    resetGame();
+                  }
+                }}
+                className={`flex-1 flex items-center justify-center gap-1 sm:gap-2 ${isTimerRunning ? 'bg-red-700 hover:bg-red-800' : 'bg-amber-800 hover:bg-amber-900'} text-white py-1.5 sm:py-3 rounded-lg sm:rounded-xl font-bold text-xs sm:text-base transition-colors shadow-sm active:scale-95`}
               >
-                <RotateCcw size={14} className="sm:w-[18px] sm:h-[18px]" />
-                最初から
+                {isTimerRunning ? (
+                  <>
+                    <ChevronRight size={14} className="sm:w-[18px] sm:h-[18px]" />
+                    不詰み　次へ
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw size={14} className="sm:w-[18px] sm:h-[18px]" />
+                    最初から
+                  </>
+                )}
               </button>
               <button
                 onClick={handleChangeGoteMove}
-                disabled={moveHistory.length === 0 || moveHistory.length % 2 === 0}
-                className={`flex-1 flex items-center justify-center bg-gray-600 text-white py-1.5 sm:py-3 rounded-lg sm:rounded-xl font-bold text-xs sm:text-base transition-colors shadow-sm active:scale-95 ${moveHistory.length === 0 || moveHistory.length % 2 === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'}`}
+                disabled={moveHistory.length === 0 || moveHistory.length % 2 !== 0}
+                className={`flex-1 flex items-center justify-center bg-gray-600 text-white py-1.5 sm:py-3 rounded-lg sm:rounded-xl font-bold text-xs sm:text-base transition-colors shadow-sm active:scale-95 ${moveHistory.length === 0 || moveHistory.length % 2 !== 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'}`}
               >
                 後手の手を変える
               </button>
@@ -1609,73 +2079,132 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
 
             {/* Comment Section below buttons */}
             <div className="w-full max-w-[600px] px-2 sm:px-0 mt-1 text-center z-10 shrink-0">
-              <p className="text-sm sm:text-base text-amber-950 truncate font-bold bg-white/60 p-2 sm:p-3 rounded-xl border border-amber-900/10 shadow-sm" title={currentProblem.description || "解説はありません"}>
+              <p className="text-sm sm:text-base text-stone-900 truncate font-bold bg-white/60 p-2 sm:p-3 rounded-xl border border-stone-800/10 shadow-sm" title={currentProblem.description || "解説はありません"}>
                 {currentProblem.description || "解説はありません"}
               </p>
             </div>
 
           {/* Edit Palette */}
           {isEditMode && (
-            <div className="w-full max-w-[600px] px-2 sm:px-0">
-              <div className="bg-white/80 p-4 rounded-xl border border-amber-300 shadow-sm">
-                <h3 className="font-bold text-amber-900 mb-2">盤面編集ツール</h3>
-              <div className="flex flex-wrap gap-2 mb-4">
-                <button
-                  onClick={() => setEditTool('eraser')}
-                  className={`px-3 py-1 rounded border text-sm ${editTool === 'eraser' ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white hover:bg-amber-100'}`}
-                >
-                  消しゴム
-                </button>
-                <button
-                  onClick={() => {
-                    setEditTool(null);
-                    setSelectedSquare(null);
-                  }}
-                  className={`px-3 py-1 rounded border text-sm ${editTool === null ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white hover:bg-amber-100'}`}
-                >
-                  移動 / 反転
-                </button>
-              </div>
-              
-              <div className="flex flex-col sm:flex-row gap-4">
-                <div className="flex-1">
-                  <div className="text-xs font-bold mb-1 text-amber-900">先手（黒）の駒を配置</div>
-                  <div className="flex flex-wrap gap-1">
-                    {['FU', 'KY', 'KE', 'GI', 'KI', 'KA', 'HI', 'OU', 'TO', 'NY', 'NK', 'NG', 'UM', 'RY'].map(kind => (
-                      <button
-                        key={`black-${kind}`}
-                        onClick={() => setEditTool({ kind, color: Color.Black })}
-                        className={`w-8 h-8 flex items-center justify-center border rounded text-sm ${editTool !== 'eraser' && editTool?.kind === kind && editTool?.color === Color.Black ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white hover:bg-amber-100'}`}
-                      >
-                        {PIECE_NAMES[kind]}
-                      </button>
-                    ))}
+            <div className="w-full max-w-[600px] px-2 sm:px-0 flex flex-col gap-4">
+              <div className="bg-white/80 p-4 rounded-xl border border-stone-400 shadow-sm space-y-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Edit2 size={20} className="text-stone-700" />
+                  <h3 className="font-bold text-stone-800">問題の設定と盤面編集</h3>
+                </div>
+
+                <div className="space-y-4 border-b border-stone-300 pb-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-stone-700 block uppercase tracking-wider">問題タイトル</label>
+                    <input
+                      type="text"
+                      value={currentProblem.title}
+                      onChange={(e) => {
+                        const updatedProblems = [...problems];
+                        updatedProblems[currentProblemIndex] = {
+                          ...currentProblem,
+                          title: e.target.value,
+                        };
+                        setProblems(updatedProblems);
+                      }}
+                      className="w-full text-xl font-bold p-2 border border-stone-400 rounded-lg bg-white text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-500"
+                      placeholder="問題のタイトルを入力"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-stone-700 block uppercase tracking-wider">解説・ヒント</label>
+                    <textarea
+                      value={currentProblem.description || ''}
+                      onChange={(e) => {
+                        const updatedProblems = [...problems];
+                        updatedProblems[currentProblemIndex] = {
+                          ...currentProblem,
+                          description: e.target.value,
+                        };
+                        setProblems(updatedProblems);
+                      }}
+                      className="w-full p-3 border border-stone-400 rounded-xl bg-white text-stone-800 focus:outline-none focus:ring-2 focus:ring-stone-500"
+                      rows={3}
+                      placeholder="問題の説明を入力してください"
+                    />
                   </div>
                 </div>
-                <div className="flex-1">
-                  <div className="text-xs font-bold mb-1 text-amber-900">後手（白）の駒を配置</div>
-                  <div className="flex flex-wrap gap-1">
-                    {['FU', 'KY', 'KE', 'GI', 'KI', 'KA', 'HI', 'OU', 'TO', 'NY', 'NK', 'NG', 'UM', 'RY'].map(kind => (
-                      <button
-                        key={`white-${kind}`}
-                        onClick={() => setEditTool({ kind, color: Color.White })}
-                        className={`w-8 h-8 flex items-center justify-center border rounded text-sm ${editTool !== 'eraser' && editTool?.kind === kind && editTool?.color === Color.White ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white hover:bg-amber-100'}`}
-                      >
-                        <span className="rotate-180">{PIECE_NAMES[kind]}</span>
-                      </button>
-                    ))}
+
+                <div className="flex flex-wrap gap-2 mb-4">
+                  <button
+                    onClick={() => setEditTool('eraser')}
+                    className={`px-3 py-1 rounded border text-sm ${editTool === 'eraser' ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white hover:bg-stone-200'}`}
+                  >
+                    消しゴム
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditTool(null);
+                      setSelectedSquare(null);
+                    }}
+                    className={`px-3 py-1 rounded border text-sm ${editTool === null ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white hover:bg-stone-200'}`}
+                  >
+                    移動 / 反転
+                  </button>
+                </div>
+                
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <div className="flex-1">
+                    <div className="text-xs font-bold mb-1 text-stone-800">先手（黒）の駒を配置</div>
+                    <div className="flex flex-wrap gap-1">
+                      {['FU', 'KY', 'KE', 'GI', 'KI', 'KA', 'HI', 'OU', 'TO', 'NY', 'NK', 'NG', 'UM', 'RY'].map(kind => (
+                        <button
+                          key={`black-${kind}`}
+                          onClick={() => setEditTool({ kind, color: Color.Black })}
+                          className={`w-8 h-8 flex items-center justify-center border rounded text-sm ${editTool !== 'eraser' && editTool?.kind === kind && editTool?.color === Color.Black ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white hover:bg-stone-200'}`}
+                        >
+                          {PIECE_NAMES[kind]}
+                        </button>
+                      ))}
+                    </div>
                   </div>
+                  <div className="flex-1">
+                    <div className="text-xs font-bold mb-1 text-stone-800">後手（白）の駒を配置</div>
+                    <div className="flex flex-wrap gap-1">
+                      {['FU', 'KY', 'KE', 'GI', 'KI', 'KA', 'HI', 'OU', 'TO', 'NY', 'NK', 'NG', 'UM', 'RY'].map(kind => (
+                        <button
+                          key={`white-${kind}`}
+                          onClick={() => setEditTool({ kind, color: Color.White })}
+                          className={`w-8 h-8 flex items-center justify-center border rounded text-sm ${editTool !== 'eraser' && editTool?.kind === kind && editTool?.color === Color.White ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white hover:bg-stone-200'}`}
+                        >
+                          <span className="rotate-180">{PIECE_NAMES[kind]}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <button 
+                    onClick={toggleEditMode}
+                    className="w-full sm:w-auto bg-amber-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-amber-700 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Check size={18} />
+                    編集を完了してセーブする
+                  </button>
                 </div>
               </div>
             </div>
-          </div>
           )}
         </div>
       </main>
 
       {/* Floating Toolbar Toggle */}
-      <div className="absolute bottom-4 right-4 sm:bottom-8 sm:right-8 flex items-end gap-2 sm:gap-3 z-20 pointer-events-none">
+      <div className="absolute bottom-4 right-4 sm:bottom-8 sm:right-8 flex flex-col items-end gap-2 sm:gap-3 z-20 pointer-events-none">
         
+        <button
+          onClick={() => setShowProgressModal(true)}
+          className="mb-10 sm:mb-12 w-12 h-12 sm:w-14 sm:h-14 bg-stone-50 text-stone-800 border-2 border-amber-600 rounded-full shadow-lg flex items-center justify-center hover:bg-stone-200 hover:scale-105 active:scale-95 transition-all flex-shrink-0 pointer-events-auto"
+          title="正解状況を見る"
+        >
+          <ListOrdered size={24} className="sm:scale-110" />
+        </button>
+
         <button
           onClick={() => setIsToolbarOpen(true)}
           className="w-12 h-12 sm:w-14 sm:h-14 bg-amber-600 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-amber-700 hover:scale-105 active:scale-95 transition-all flex-shrink-0 pointer-events-auto"
@@ -1684,6 +2213,67 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
           <Menu size={24} className="sm:scale-110" />
         </button>
       </div>
+
+      {/* Progress Modal */}
+      <AnimatePresence>
+        {showProgressModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+            onClick={() => setShowProgressModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-stone-100 w-full max-w-md rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[80vh]"
+            >
+              <div className="p-4 border-b border-stone-800/10 flex justify-between items-center bg-white/50">
+                <h3 className="font-bold text-stone-800 text-lg">正解状況</h3>
+                <button onClick={() => setShowProgressModal(false)} className="p-2 bg-stone-200 rounded-full text-stone-800 hover:bg-stone-300 transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="p-4 overflow-y-auto flex-1 bg-white/30">
+                 <div className="grid grid-cols-5 gap-2 sm:gap-3">
+                   {problems.map((p, i) => {
+                      const isSolved = solvedProblems.includes(p.id);
+                      const isCurrent = currentProblemIndex === i;
+                      const resetCount = resetCounts[p.id] || 0;
+                      return (
+                        <button 
+                          key={p.id} 
+                          onClick={() => { setCurrentProblemIndex(i); setShowProgressModal(false); }} 
+                          className={`
+                            relative p-2 rounded-xl flex flex-col items-center justify-center border-2 transition-all shadow-sm
+                            ${isCurrent ? 'ring-2 ring-stone-500 ring-offset-2 ring-offset-[#fdf6e3]' : ''}
+                            ${isSolved ? 'bg-green-100 border-green-300 text-green-800 hover:bg-green-200' : 'bg-white border-stone-300 text-stone-800 hover:bg-stone-50'}
+                          `}
+                        >
+                           <span className="text-sm font-bold">{i+1}</span>
+                           <div className={`text-xs mt-1 font-semibold ${isSolved ? 'text-green-700/80' : 'text-stone-700/80'}`}>
+                             {resetCount}回
+                           </div>
+                        </button>
+                      );
+                   })}
+                 </div>
+              </div>
+              <div className="p-4 bg-stone-50/50 border-t border-stone-800/10 flex items-center justify-center gap-8">
+                <span className="text-sm font-bold text-stone-800">
+                  正解：{solvedProblems.length}問 / {problems.length}
+                </span>
+                <span className="text-sm font-bold text-stone-800">
+                  間違えた回数: {Object.values(resetCounts).reduce((a, b) => a + b, 0)}回
+                </span>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Action Drawer */}
       <AnimatePresence>
@@ -1700,89 +2290,64 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: "spring", bounce: 0, duration: 0.4 }}
-              className="absolute bottom-0 left-0 right-0 max-h-[85vh] bg-[#fdf6e3] rounded-t-3xl shadow-2xl overflow-y-auto"
+              className="absolute bottom-0 left-0 right-0 max-h-[85vh] bg-stone-100 rounded-t-3xl shadow-2xl overflow-y-auto"
               onClick={e => e.stopPropagation()}
             >
-              <div className="sticky top-0 bg-[#fdf6e3]/90 backdrop-blur pb-2 pt-4 px-6 border-b border-amber-900/10 flex justify-between items-center z-10">
-                <h2 className="font-bold text-amber-900 text-lg">ツール・設定</h2>
+              <div className="sticky top-0 bg-stone-100/90 backdrop-blur pb-2 pt-4 px-6 border-b border-stone-800/10 flex justify-between items-center z-10">
+                <h2 className="font-bold text-stone-800 text-lg">ツール・設定</h2>
                 <button
                   onClick={() => setIsToolbarOpen(false)}
-                  className="p-2 bg-amber-100 rounded-full text-amber-900 hover:bg-amber-200"
+                  className="p-2 bg-stone-200 rounded-full text-stone-800 hover:bg-stone-300"
                 >
                   <X size={20} />
                 </button>
               </div>
 
               <div className="p-4 sm:p-6 space-y-6">
-                {/* Info Column Restored */}
-                <section className="bg-white/60 p-4 sm:p-6 rounded-xl border border-amber-200 shadow-sm flex flex-col gap-4">
-                  {isEditMode ? (
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-amber-700 block uppercase tracking-wider">問題タイトル</label>
-                        <input
-                          type="text"
-                          value={currentProblem.title}
-                          onChange={(e) => {
-                            const updatedProblems = [...problems];
-                            updatedProblems[currentProblemIndex] = {
-                              ...currentProblem,
-                              title: e.target.value,
-                            };
-                            setProblems(updatedProblems);
-                          }}
-                          className="w-full text-xl font-bold p-2 border border-amber-300 rounded-lg bg-white text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                          placeholder="問題のタイトルを入力"
-                        />
-                      </div>
 
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-amber-700 block uppercase tracking-wider">問題の説明 / 解説</label>
-                        <textarea
-                          value={currentProblem.description}
-                          onChange={(e) => {
-                            const updatedProblems = [...problems];
-                            updatedProblems[currentProblemIndex] = {
-                              ...currentProblem,
-                              description: e.target.value,
-                            };
-                            setProblems(updatedProblems);
-                          }}
-                          className="w-full p-3 border border-amber-300 rounded-xl bg-white text-amber-900 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                          rows={4}
-                          placeholder="問題の説明を入力してください"
-                        />
-                        <button 
-                          onClick={toggleEditMode}
-                          className="w-full bg-amber-600 text-white py-2 rounded-lg font-bold hover:bg-amber-700 transition-colors flex items-center justify-center gap-2"
-                        >
-                          <Check size={18} />
-                          編集内容を確定
-                        </button>
-                      </div>
+                {/* App Title Setting */}
+                <section className="bg-white/60 p-4 rounded-xl border border-stone-300 shadow-sm flex flex-col gap-2">
+                  <label className="text-xs font-bold text-stone-700 uppercase tracking-wider block">アプリのタイトル</label>
+                  <input
+                    type="text"
+                    value={appTitle}
+                    onChange={(e) => {
+                      setAppTitle(e.target.value);
+                      localStorage.setItem('tsumeShogiAppTitle', e.target.value);
+                    }}
+                    className="w-full text-lg font-bold p-2 border border-stone-400 rounded-lg bg-white text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-500"
+                    placeholder="アプリのタイトル"
+                  />
+                </section>
+
+                {/* Info Column Restored */}
+                <section className="bg-white/60 p-4 sm:p-6 rounded-xl border border-stone-300 shadow-sm flex flex-col gap-4">
+                  {isEditMode ? (
+                    <div className="flex items-center justify-center p-4">
+                       <p className="text-stone-800 font-bold mb-2">盤面と情報を編集中...</p>
                     </div>
                   ) : (
                     <>
-                      <p className="text-amber-800 leading-relaxed whitespace-pre-wrap border-b border-amber-900/10 pb-4">
+                      <p className="text-stone-800 leading-relaxed whitespace-pre-wrap border-b border-stone-800/10 pb-4">
                         {currentProblem.description}
                       </p>
                       <div className="flex justify-end">
                         <button 
                           onClick={toggleEditMode}
-                          className="flex items-center gap-1 text-sm px-3 py-1.5 rounded transition-colors bg-amber-200 text-amber-800 hover:bg-amber-300 font-bold"
-                          title="盤面を編集する"
+                          className="flex items-center gap-1 text-sm px-4 py-2 rounded transition-colors bg-stone-300 text-stone-800 hover:bg-amber-300 font-bold shadow-sm"
+                          title="問題の設定と盤面を編集する"
                         >
-                          <Edit2 size={14} /> 盤面を修正
+                          <Edit2 size={16} /> 盤面・設定の編集
                         </button>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap pt-2">
-                        <button onClick={() => setShowInfo(!showInfo)} className="text-amber-600 hover:text-amber-800 flex items-center gap-1 text-sm font-bold bg-amber-100 px-2 py-1 rounded" title="ヒント">
+                        <button onClick={() => setShowInfo(!showInfo)} className="text-stone-600 hover:text-stone-800 flex items-center gap-1 text-sm font-bold bg-stone-200 px-2 py-1 rounded" title="ヒント">
                           <Info size={16} /> ヒント
                         </button>
-                        <button onClick={moveProblemUp} disabled={currentProblemIndex === 0} className="p-1 text-amber-600 hover:bg-amber-200 rounded disabled:opacity-30" title="前に移動"><ArrowUp size={16} /></button>
-                        <button onClick={moveProblemDown} disabled={currentProblemIndex === problems.length - 1} className="p-1 text-amber-600 hover:bg-amber-200 rounded disabled:opacity-30" title="後ろに移動"><ArrowDown size={16} /></button>
-                        <button onClick={renumberProblems} className="p-1 text-amber-600 hover:bg-amber-200 rounded" title="問題番号を順番通りに振り直す"><ListOrdered size={16} /></button>
-                        <button onClick={duplicateProblem} className="p-1 text-amber-600 hover:bg-amber-200 rounded" title="この問題を複製"><Copy size={16} /></button>
+                        <button onClick={moveProblemUp} disabled={currentProblemIndex === 0} className="p-1 text-stone-600 hover:bg-stone-300 rounded disabled:opacity-30" title="前に移動"><ArrowUp size={16} /></button>
+                        <button onClick={moveProblemDown} disabled={currentProblemIndex === problems.length - 1} className="p-1 text-stone-600 hover:bg-stone-300 rounded disabled:opacity-30" title="後ろに移動"><ArrowDown size={16} /></button>
+                        <button onClick={renumberProblems} className="p-1 text-stone-600 hover:bg-stone-300 rounded" title="問題番号を順番通りに振り直す"><ListOrdered size={16} /></button>
+                        <button onClick={duplicateProblem} className="p-1 text-stone-600 hover:bg-stone-300 rounded" title="この問題を複製"><Copy size={16} /></button>
                         <button onClick={deleteProblem} className="p-1 text-red-500 hover:bg-red-100 rounded" title="この問題を削除"><Trash2 size={16} /></button>
                       </div>
                     </>
@@ -1802,10 +2367,98 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
                   )}
                 </AnimatePresence>
 
-                {/* Upload Section */}
+                {/* App Settings Section */}
+                <section className="bg-white/60 p-4 rounded-xl border border-stone-300 shadow-sm flex flex-col gap-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-col">
+                      <span className="font-bold text-stone-800 text-sm">出題順ランダム</span>
+                      <span className="text-xs text-stone-700">ONにすると未正解の問題からランダムに出題します</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const next = !isRandomOrder;
+                        setIsRandomOrder(next);
+                        localStorage.setItem('tsumeShogiRandomOrder', String(next));
+                      }}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-stone-500 focus:ring-offset-2 ${isRandomOrder ? 'bg-amber-600' : 'bg-gray-300'}`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isRandomOrder ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </button>
+                  </div>
+                </section>
+
+                {/* In-App Data Section */}
                 <div className="w-full">
-                  <div className="bg-white/60 p-4 rounded-xl border border-amber-200 shadow-sm flex flex-col items-center justify-between gap-4">
-                    <div className="flex flex-col items-start gap-4 text-amber-900 w-full">
+                  <div className="bg-white/60 p-4 rounded-xl border border-stone-300 shadow-sm flex flex-col gap-4">
+                    <div className="flex items-center gap-2 text-stone-800">
+                      <Settings size={20} />
+                      <span className="font-bold text-sm">アプリ内データ管理</span>
+                    </div>
+
+                    <button
+                      onClick={saveCurrentDataSet}
+                      className="w-full flex items-center justify-center gap-2 bg-amber-800 text-white px-4 py-2 rounded-lg font-bold hover:bg-amber-900 transition-colors"
+                      title="現在のすべての問題リストをアプリ内に新しく保存します"
+                    >
+                      <Plus size={18} />
+                      現在のデータをアプリに保存
+                    </button>
+
+                    <div className="flex gap-2 w-full mt-2">
+                      <button
+                        onClick={copyAllDataSets}
+                        className="flex items-center justify-center gap-2 text-xs text-stone-700 hover:text-stone-800 bg-white px-2 py-1.5 rounded-md border border-stone-400 shadow-sm transition-colors flex-1"
+                        title="保存済みデータセットをクリップボードにコピー"
+                      >
+                        <ClipboardCopy size={14} />
+                        保存データをコピー
+                      </button>
+                      <input
+                        type="file"
+                        accept="application/json"
+                        className="hidden"
+                        ref={datasetsJsonFileInputRef}
+                        onChange={handleDataSetsJsonImport}
+                      />
+                      <button
+                        onClick={() => datasetsJsonFileInputRef.current?.click()}
+                        className="flex items-center justify-center gap-2 text-xs text-stone-700 hover:text-stone-800 bg-white px-2 py-1.5 rounded-md border border-stone-400 shadow-sm transition-colors flex-1"
+                        title="保存済みデータセットをインポート"
+                      >
+                        <Download size={14} />
+                        保存データをインポート
+                      </button>
+                    </div>
+
+                    {savedDataSets.length > 0 && (
+                      <div className="flex flex-col gap-2 mt-2">
+                        <span className="text-xs font-bold text-stone-700">保存済みデータ（クリックで読み込み）:</span>
+                        <div className="max-h-40 overflow-y-auto pr-1 flex flex-col gap-2">
+                          {savedDataSets.map((ds) => (
+                            <div key={ds.id} className="flex items-center justify-between bg-white px-3 py-2 rounded-md border border-stone-300 shadow-sm text-sm hover:border-amber-400 cursor-pointer transition-colors" onClick={() => loadDataSet(ds)}>
+                              <div className="flex flex-col overflow-hidden">
+                                <span className="font-bold text-stone-800 truncate">{ds.title}</span>
+                                <span className="text-xs text-stone-600 line-clamp-1 truncate">{ds.problems.length}問</span>
+                              </div>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); deleteDataSet(ds.id); }}
+                                className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                title="削除"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Upload Section */}
+                <div className="w-full mt-4">
+                  <div className="bg-white/60 p-4 rounded-xl border border-stone-300 shadow-sm flex flex-col items-center justify-between gap-4">
+                    <div className="flex flex-col items-start gap-4 text-stone-800 w-full">
                       <div className="flex items-center gap-2">
                         <Upload size={20} />
                         <span className="font-bold text-sm">問題を追加・エクスポートする</span>
@@ -1814,7 +2467,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
                       <div className="flex flex-wrap gap-2 w-full">
                         <button
                           onClick={copyAllData}
-                          className="flex items-center justify-center gap-2 text-sm text-amber-700 hover:text-amber-900 bg-white px-3 py-1.5 rounded-md border border-amber-300 shadow-sm transition-colors flex-1"
+                          className="flex items-center justify-center gap-2 text-sm text-stone-700 hover:text-stone-800 bg-white px-3 py-1.5 rounded-md border border-stone-400 shadow-sm transition-colors flex-1"
                           title="現在の問題データをクリップボードにコピー"
                         >
                           <ClipboardCopy size={16} />
@@ -1830,7 +2483,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
                         />
                         <button
                           onClick={() => jsonFileInputRef.current?.click()}
-                          className="flex items-center justify-center gap-2 text-sm text-amber-700 hover:text-amber-900 bg-white px-3 py-1.5 rounded-md border border-amber-300 shadow-sm transition-colors flex-1"
+                          className="flex items-center justify-center gap-2 text-sm text-stone-700 hover:text-stone-800 bg-white px-3 py-1.5 rounded-md border border-stone-400 shadow-sm transition-colors flex-1"
                           title="JSONファイルから問題データをインポート"
                         >
                           <Download size={16} />
@@ -1862,10 +2515,10 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
                         </button>
                       </div>
                     </div>
-                    <div className="flex flex-col gap-4 w-full mt-2 pt-4 border-t border-amber-900/10">
+                    <div className="flex flex-col gap-4 w-full mt-2 pt-4 border-t border-stone-800/10">
                       <button
                         onClick={handleAddEmptyProblem}
-                        className="w-full flex items-center justify-center gap-2 bg-amber-100 text-amber-900 px-4 py-2 rounded-lg font-bold hover:bg-amber-200 transition-colors"
+                        className="w-full flex items-center justify-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg font-bold hover:bg-stone-300 transition-colors"
                       >
                         <Plus size={18} />
                         空の盤面を追加
@@ -1880,7 +2533,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
                       <button
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isUploading}
-                        className="w-full flex items-center justify-center gap-2 bg-amber-100 text-amber-900 px-4 py-2 rounded-lg font-bold hover:bg-amber-200 transition-colors disabled:opacity-50"
+                        className="w-full flex items-center justify-center gap-2 bg-stone-200 text-stone-800 px-4 py-2 rounded-lg font-bold hover:bg-stone-300 transition-colors disabled:opacity-50"
                       >
                         {isUploading ? (
                           <Loader2 size={18} className="animate-spin" />
@@ -1919,7 +2572,7 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
               exit={{ scale: 0.9 }}
               className="bg-white p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-6 max-w-sm w-full"
             >
-              <h3 className="text-2xl font-bold text-amber-900">成りますか？</h3>
+              <h3 className="text-2xl font-bold text-stone-800">成りますか？</h3>
               <div className="flex gap-4 w-full">
                 <button
                   onClick={() => {
@@ -1951,6 +2604,78 @@ SFEN形式の例: 7nl/1R3sk2/5pppp/9/9/9/9/9/9 b GS 1
               >
                 キャンセル
               </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Startup Dataset Selection Modal */}
+      <AnimatePresence>
+        {showStartupModal && !isLoadingProblems && savedDataSets.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="bg-[#FDF6E2] w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-[#EBE4D3] flex flex-col max-h-[80vh]"
+            >
+              <div className="p-4 sm:p-6 pb-2 border-b border-stone-800/10">
+                <h2 className="text-xl font-bold text-stone-800 text-center">どの問題を解きますか？</h2>
+              </div>
+              <div className="px-4 py-3 sm:px-6 bg-[#FDF6E2] border-b border-stone-800/10 flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="font-bold text-stone-800 text-sm">出題順ランダム</span>
+                  <span className="text-xs text-stone-700 mt-0.5">ONにすると最初の問題もランダムに選びます</span>
+                </div>
+                <button
+                  onClick={() => {
+                    const next = !isRandomOrder;
+                    setIsRandomOrder(next);
+                    localStorage.setItem('tsumeShogiRandomOrder', String(next));
+                  }}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-stone-500 focus:ring-offset-2 flex-shrink-0 ${isRandomOrder ? 'bg-amber-600' : 'bg-gray-300'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isRandomOrder ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              <div className="p-4 sm:p-6 overflow-y-auto flex-1 flex flex-col gap-3">
+                <span className="text-sm font-bold text-stone-700">保存済みデータから選ぶ:</span>
+                <div className="flex flex-col gap-2">
+                  {savedDataSets.map((ds) => (
+                    <button
+                      key={ds.id}
+                      onClick={() => {
+                        loadDataSetFromStartup(ds);
+                      }}
+                      className="flex flex-col items-start bg-white px-4 py-3 rounded-lg border border-stone-300 shadow-sm hover:border-amber-400 hover:bg-stone-50 transition-colors w-full text-left focus:outline-none focus:ring-2 focus:ring-stone-500"
+                    >
+                      <span className="font-bold text-stone-800 text-base">{ds.title}</span>
+                      <span className="text-xs text-stone-600 mt-1">{ds.problems.length}問収録</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="p-4 bg-[#FDF6E2] border-t border-stone-300 flex justify-center">
+                <button
+                  onClick={() => {
+                    if (savedDataSets.length > 0) {
+                      const randomDatasetIndex = Math.floor(Math.random() * savedDataSets.length);
+                      loadDataSetFromStartup(savedDataSets[randomDatasetIndex]);
+                    } else {
+                      setShowStartupModal(false);
+                      setCurrentProblemIndex(0);
+                    }
+                  }}
+                  className="px-6 py-2 bg-white border border-stone-400 text-stone-800 font-bold rounded-lg hover:bg-stone-200 transition-colors shadow-sm"
+                >
+                  ランダムで選択
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
