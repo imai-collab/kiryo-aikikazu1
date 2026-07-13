@@ -1,0 +1,178 @@
+[
+  {
+    "id": "1783955974371",
+    "title": "©kiryoアプリ　合いきかず26問 (2026/7/14)",
+    "appTitle": "©kiryoアプリ　合いきかず26問",
+    "problems": [
+      {
+        "id": 1,
+        "title": "第1問",
+        "description": "第 57 問",
+        "initialSfen": "5R1Sk/8l/7pp/9/9/9/9/9/9 b r2b4g3s4n3l16p 1"
+      },
+      {
+        "id": 2,
+        "title": "第2問",
+        "description": "第 46 問",
+        "initialSfen": "9/8l/4+B3k/8p/7L1/9/9/9/9 b 2rb4g4s4n2l17p 1"
+      },
+      {
+        "id": 3,
+        "title": "第3問",
+        "description": "第 43 問",
+        "initialSfen": "7n1/5R1Bk/7pp/9/5r3/9/9/9/9 b b4g4s3n4l16p 1"
+      },
+      {
+        "id": 4,
+        "title": "第4問",
+        "description": "第 44 問",
+        "initialSfen": "7nl/5RS1k/7pp/9/9/9/9/9/9 b r2b4g3s3n3l16p 1"
+      },
+      {
+        "id": 5,
+        "title": "第5問",
+        "description": "第 47 問",
+        "initialSfen": "5pkp1/7sg/7R+B/5N3/9/9/9/9/9 b rb3g3s3n4l16p 1"
+      },
+      {
+        "id": 6,
+        "title": "第6問",
+        "description": "第 55 問",
+        "initialSfen": "6+B2/7Gl/7pk/6r1p/6bP1/9/9/9/9 b r3g4s4n3l15p 1"
+      },
+      {
+        "id": 7,
+        "title": "第7問",
+        "description": "第 56 問",
+        "initialSfen": "6+B1l/7R1/4b2pk/8p/7P1/9/9/9/9 b r4g4s4n3l15p 1"
+      },
+      {
+        "id": 8,
+        "title": "第8問",
+        "description": "第 58 問",
+        "initialSfen": "8+B/5n3/5k1+B1/4Lp3/9/9/9/9/9 b 2r4g4s3n3l17p 1"
+      },
+      {
+        "id": 9,
+        "title": "第9問",
+        "description": "第 59 問",
+        "initialSfen": "5R3/9/7kp/5+B3/8P/9/9/9/9 b rb4g4s4n4l16p 1"
+      },
+      {
+        "id": 10,
+        "title": "第10問",
+        "description": "第 61 問",
+        "initialSfen": "5+B3/6G1r/8p/7pk/9/7PP/9/9/9 b rb3g4s4n4l14p 1"
+      },
+      {
+        "id": 11,
+        "title": "第11問",
+        "description": "第 62 問",
+        "initialSfen": "5+B3/6G1l/5Spkp/7p1/9/9/9/9/9 b 2rb3g3s4n3l15p 1"
+      },
+      {
+        "id": 12,
+        "title": "第12問",
+        "description": "第 65 問",
+        "initialSfen": "9/9/8g/8k/9/6LLP/5+B3/9/9 b 2rb3g4s4n2l17p 1"
+      },
+      {
+        "id": 13,
+        "title": "第13問",
+        "description": "第 66 問",
+        "initialSfen": "9/9/5b1pp/8k/9/6LLP/5+B3/9/9 b 2r4g4s4n2l15p 1"
+      },
+      {
+        "id": 14,
+        "title": "第14問",
+        "description": "第 67 問",
+        "initialSfen": "9/9/6lpg/6r1k/8p/7L1/5R3/4+B4/9 b b3g4s4n2l16p 1"
+      },
+      {
+        "id": 15,
+        "title": "第15問",
+        "description": "第 68 問",
+        "initialSfen": "9/9/7pg/8k/4+r3p/7L1/5R3/4+B4/9 b b3g4s4n3l16p 1"
+      },
+      {
+        "id": 16,
+        "title": "第16問",
+        "description": "第 69 問",
+        "initialSfen": "9/9/8g/8k/6S1p/7P1/3P1R3/4+B4/9 b rb3g3s4n4l15p 1"
+      },
+      {
+        "id": 17,
+        "title": "第17問",
+        "description": "第 71 問",
+        "initialSfen": "9/9/5B3/6R2/9/7Sk/7+b1/9/6r2 b 4g3s4n4l18p 1"
+      },
+      {
+        "id": 18,
+        "title": "第18問",
+        "description": "第 72 問",
+        "initialSfen": "9/9/5B1R1/7B1/9/7k1/6P2/9/8L b r4g4s4n3l17p 1"
+      },
+      {
+        "id": 19,
+        "title": "第19問",
+        "description": "第 73 問",
+        "initialSfen": "9/9/9/9/9/9/4B4/9/5k1BR b r4g4s4n4l18p 1"
+      },
+      {
+        "id": 20,
+        "title": "第20問",
+        "description": "第 74 問",
+        "initialSfen": "9/9/9/9/9/9/5Bp2/9/5k1GR b rb3g4s4n4l17p 1"
+      },
+      {
+        "id": 21,
+        "title": "第21問",
+        "description": "第 76 問",
+        "initialSfen": "9/9/9/9/9/5B3/6R1S/3+b4p/7sk b r4g2s4n4l17p 1"
+      },
+      {
+        "id": 22,
+        "title": "第22問",
+        "description": "第 77 問",
+        "initialSfen": "9/9/7p1/8k/6B1+r/6R2/5B2N/9/9 b 4g4s3n4l17p 1"
+      },
+      {
+        "id": 23,
+        "title": "第23問",
+        "description": "第 78 問",
+        "initialSfen": "6r2/6l2/8l/1+RB5k/7Lp/7P1/9/9/9 b b3g4s4n2l16p 1"
+      },
+      {
+        "id": 24,
+        "title": "第24問",
+        "description": "第 79 問",
+        "initialSfen": "9/4+B2R1/9/5k3/4ps+r2/5L3/8B/9/9 b 4g3s4n3l17p 1"
+      },
+      {
+        "id": 25,
+        "title": "第25問",
+        "description": "第 75 問",
+        "initialSfen": "9/9/9/9/9/5B3/6R1S/5+p2p/7gk b rb3g3s4n4l16p 1"
+      },
+      {
+        "id": 26,
+        "title": "第26問",
+        "description": "第 38 問",
+        "initialSfen": "7pk/9/9/9/8N/8L/9/9/9 b 2r2b4g4s3n3l17p 1"
+      },
+      {
+        "id": 27,
+        "title": "第27問",
+        "description": "第 60 問",
+        "initialSfen": "9/5+P3/4R1SkP/7pp/5bP2/9/9/9/9 b rb4g3s4n4l13p 1"
+      },
+      {
+        "id": 28,
+        "title": "第28問",
+        "description": "第 41 問",
+        "initialSfen": "5pk2/8+R/9/9/6B2/9/9/9/9 b rb4g4s4n4l17p 1"
+      }
+    ],
+    "timestamp": 1783955974381
+  }
+]
